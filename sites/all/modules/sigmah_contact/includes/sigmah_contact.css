@@ -1,0 +1,10 @@
+@charset "UTF-8";
+/**
+* sigmah_contact.css
+* Contact form submission landing page CSS.
+*/
+
+#page-contact-submitted .contentTable td
+{
+  	vertical-align: middle;
+}

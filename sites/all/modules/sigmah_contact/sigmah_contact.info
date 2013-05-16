@@ -1,0 +1,11 @@
+name = Sigmah Contact
+description = Makes the sigmah contact form a little more configurable (UI) and enables it to directly create users/og group (forum) nodes.
+package = Sigmah
+core = 6.x
+dependencies[] = og
+dependencies[] = contact
+
+
+version = "6.x-1.x-beta1"
+core = "6.x"
+project = "sigmah_contact"

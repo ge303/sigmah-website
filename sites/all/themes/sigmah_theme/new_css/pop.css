@@ -1,6 +1,14 @@
 @charset "UTF-8";
 /* CSS Document */
 
+.messages.error  {
+	margin-top: 50px;
+}
+
+#stepPop.hidden  {
+	display: none;
+}
+
 body {
 	background:url("../img/bg_clair.jpg") repeat scroll 0 0 transparent;
 	color:#855c41;
@@ -18,7 +26,6 @@ body {
 	position:fixed;
 	top:0px;
 	z-index:999;
-
 }
 
 h4 span {

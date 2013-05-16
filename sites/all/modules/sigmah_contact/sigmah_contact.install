@@ -1,0 +1,110 @@
+<?php 
+
+/**
+ * Implements hook_contact_schema().
+ */
+function sigmah_contact_schema() {
+    $schema = array();
+    $schema['contact_cid_og'] = array(
+      'description' => t('Table linking contact categories and og forum group nodes.'),
+      'fields' => array(
+        'cid' => array(
+          'description' => t('Contact category ID.'),
+          'type' => 'int',
+          'not null' => TRUE,
+        ),
+        'nid' => array(
+          'description' => t('OG Group (forum) nID.'),
+          'type' => 'int',
+          'not null' => TRUE,
+        ),
+        'enabled' => array(
+          'description' => t('Should this contact category be visible on the contact form.'),
+          'type' => 'int',
+          'size' => 'tiny',
+          'not null' => TRUE,
+        ),        
+        'managed' => array(
+          'description' => t('Is this contact category managed by this module.'),
+          'type' => 'int',
+          'size' => 'tiny',
+          'not null' => TRUE,
+        ),
+        'forum_posting_disabled' => array(
+          'description' => t('Is forum posting disabled for this contact category.'),
+          'type' => 'int',
+          'size' => 'tiny',
+          'not null' => FALSE,
+        ),
+      ),
+      'unique keys' => array(
+        'cid_nid' => array('cid', 'nid')
+      ),
+    );
+    return $schema;
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function sigmah_contact_uninstall() {
+  drupal_uninstall_schema('sigmah_contact');
+
+  db_query("DELETE FROM {variable} WHERE name LIKE 'sigmah_contact\_%'");
+  db_query("DELETE FROM {cache} WHERE cid='variables'");
+}
+
+/**
+ * Implements hook_install().
+ */
+function sigmah_contact_install() {  
+  drupal_install_schema("sigmah_contact");
+
+      // Insert default sigmah.org cid_og rows as 05/2013 in {contact_cid_og}
+      $datas = array(
+      $data = array(
+         'cid' => 1,
+         'nid' => 224,
+         'enabled' => 1,
+         'managed' => 1,   
+         'forum_posting_disabled' => 0      
+      ),    
+
+      $data = array(
+         'cid' => '2',
+         'nid' => '225',
+         'enabled' => '1',
+          'managed' => 1,   
+         'forum_posting_disabled' => 0  
+      ),
+
+        $data = array(
+         'cid' => '3',
+         'nid' => '226',
+         'enabled' => '1',
+         'managed' => 1,    
+         'forum_posting_disabled' => 0
+      )); 
+
+      // Defaults -sigmah.org specific
+      foreach($datas as $dataf){
+            db_query("INSERT IGNORE INTO {contact_cid_og} VALUES ('%d', '%d', '%d', '%d', '%d')", 
+            $dataf["cid"], $dataf["nid"], $dataf["enabled"], $dataf["managed"], $dataf["forum_posting_disabled"]);
+      }
+
+      // Defaults -module and sigmah.org specific
+      variable_set("sigmah_contact_show_category_email_to_users", 0);
+      variable_set("sigmah_contact_link_category_ogforum", 1);     
+      variable_set("sigmah_contact_create_posts", 1);
+      variable_set("sigmah_contact_devel_mode_on", 0);
+      variable_set("sigmah_contact_create_users", 1);
+      variable_set("sigmah_contact_skip_submission_landing_page", 0);
+      variable_set("sigmah_contact_consider_unmanaged_categories_disabled", 0);
+      variable_set('sigmah_contact_form_id', 'contact_mail_page');
+      variable_set('sigmah_contact_form_submit_redirect_ms', 5000);
+      variable_set('sigmah_contact_create_users_flood_protect', 1);
+      variable_set('sigmah_contact_create_users_flood_protect_hour_threshold', 2);
+}
+
+
+?>

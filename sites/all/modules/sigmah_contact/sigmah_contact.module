@@ -1,0 +1,864 @@
+<?php
+/**
+ * sigmah_contact.module
+*/
+
+/**
+ * Load the include file.
+*/
+module_load_include('inc', 'sigmah_contact');
+
+/**
+ * Set up the form.
+*/
+
+function sigmah_contact_form_alter(&$form, &$form_state, $form_id){	
+
+		if($form_id == variable_get('sigmah_contact_form_id', 'contact_mail_page')) 
+		{
+			// Flood control check -user creation
+			if(variable_get("sigmah_contact_create_users_flood_protect", "1") == "1" 
+				&& !user_is_logged_in()/*logged in users can just post*/
+				&& variable_get('sigmah_contact_create_users', "1") == "1"/*otherwise we just skip this check*/)
+			{
+			  $times_hour = variable_get("sigmah_contact_create_users_flood_protect_hour_threshold", "2");
+			  if($times_hour < variable_get('contact_hourly_threshold', "3"))
+			  {//don't check otherwise
+				  if(!flood_is_allowed("contact_form_user_create", $times_hour))
+				  {
+					watchdog('sigmah_contact', t('Flood control exceeded for contact form user creation. Aborting.'), null, WATCHDOG_ERROR);
+					
+					$user_create_flood_protection_msg = t("You cannot create more than %number users per hour. If you have an account you may login and try again immediately, alternatively please try again later.", array('%number' => $times_hour));
+					$form["contact_information"]["#prefix"] = $output."<br>";
+
+					$user_create_flood_protection_triggered = TRUE; // since contact and new user creation go hand in hand, we won't serve the form until the limit expires.
+				  }
+			   }
+			 }
+			// /Flood control 
+
+		if(empty($user_create_flood_protection_triggered) || !$user_create_flood_protection_triggered) {
+			$form['#redirect'] = FALSE;
+			$form['name']['#weight'] = 4;
+			$form['name']['#title'] = t('Name');
+			$form['name']['#field_prefix'] = '<table class="login"><tr><td>'.$form['name']['#title'].'</td><td>';
+			$form['name']['#field_suffix'] = '</td></tr>';
+			unset($form['name']['#title']);
+			$form['mail']['#weight'] = 5;
+			$form['mail']['#title'] = t('Your e-mail');
+			$form['mail']['#field_prefix'] = '<tr><td>'.$form['mail']['#title'].'</td><td>';
+			$form['mail']['#field_suffix'] = '</td></tr></table>';
+			unset($form['mail']['#title']);
+
+			$form['copy']['#weight'] = 6;
+
+		if(!user_is_logged_in())
+		{
+			$form['subject']['#weight'] = 1;
+			$form['message']['#weight'] = 2;
+			$form['name']['#prefix'] = '<h5>'.t('Would you like to receive a reply?').'</h5>'.
+			'<p class="if">'.t('If yes, please enter your email address here').' :</p>';
+
+			$form['mail']['#element_validate'] =  array('element_validate_registration_user_mail');
+			$form['mail']['#suffix'] = '<em class="baseline">'.t('(If you don\'t have one, a Sigmah.org account will be automatically set up)').'</em>';
+		}
+		else
+		{
+			global $user;
+			$form['name']['#prefix'] = t("<br>You are logged in and sending your message as:")." <i>".$user->name."</i>";
+			// Logged in user: disable the 'name', 'email' and make the 'signup' fields unavailable.
+			$form['#after_build'] = array('sigmah_contact_form_process_function');
+		}
+
+		$form['cid']['#type'] = 'radios';
+			
+		// Removing the please choose...
+		if(!empty($form['cid']['#options'][0])){ unset($form['cid']['#options'][0]); }
+		unset($form['cid']['#title']);
+		$form['cid']['#prefix'] = '<h6>'.t('In order to deal with your request more effectively').'</h6><p>'.t('You can specify which forum you would like your posting to appear in (Don\'t worry, a moderator will put your posting in an appropriate forum if you are not sure)').' : '.'</p>';
+		$form['cid']['#weight'] = 7;
+		$form['submit']['#weight'] = 8;
+
+		// Removing the UI contact form categories which are not enabled on the settings form.
+
+		$disabled_contact_categories  = cid_og_loadfilter_cids(array("filter_disabled" => "1"));
+		$unmanaged_contact_categories = cid_og_loadfilter_cids(array("filter_unmanaged" => "1"));
+		if(variable_get("sigmah_contact_consider_unmanaged_categories_disabled", "0") == "1")
+			$disabled_contact_categories = array_unique(array_merge($disabled_contact_categories, $unmanaged_contact_categories));
+		
+		$i = 0;  $new_options = array();
+		$new_options = $form['cid']["#options"];
+		
+		$cid_og_contact_categories = cid_og_load_cids();
+
+		if(count($disabled_contact_categories) > 0)
+		{
+			$cid_index = 0;
+			foreach($form['cid']["#options"] as $contact_cid => $value)
+			{
+				if(in_array($contact_cid, $disabled_contact_categories)) {
+						unset($new_options[$contact_cid]);
+				}
+				$cid_index++;
+			}
+		}
+		
+		if(variable_get("sigmah_contact_link_category_ogforum", '1') == '1')
+		{		
+			// Linking the labels to the relative og group (forum).
+			foreach($form['cid']["#options"] as $contact_cid => $value)
+			{
+				$g = cid_og_load_group_by_contact_cid($contact_cid);
+
+				if(empty($g)) 			 continue; //not assigned to any og group (forum)
+				
+				if($g["managed"] == "0") continue; //won't hyperlink non managed categories
+
+				$og_nid_db = $g["nid"];
+				$path = drupal_lookup_path('alias',"node/".$og_nid_db);
+				if(!empty($path) && !empty($new_options[$contact_cid])){
+					$new_options[$contact_cid] =  
+					sigmah_contact_template_hlink_from_nid($og_nid_db, $value, array("target" => "_blank"));
+				}
+				$i++;
+			}
+		}
+
+		// Inserting a quick link to the module settings page, if you have the permissions
+
+		if(user_is_logged_in() && user_access("administer sigmah_contact")):
+			$form['cid']['#prefix'] .= "[ ".l(t("administer"), "admin/settings/sigmah_contact")." sigmah_contact ]";
+		endif;
+
+		$form['cid']["#options"]    =  $new_options;
+		
+		$form['#submit']['handler'] =  "sigmah_contact_contact_submit_handler";
+		}
+		else
+		{
+			unset($form['name']);
+			unset($form['mail']);
+			unset($form['subject']);
+			unset($form['cid']);
+			unset($form['category']);
+			unset($form['message']);
+			unset($form['submit']);			
+			$form['contact_information']['#value'] = $user_create_flood_protection_msg;
+
+		}
+  }
+}
+
+/**
+ * Link contact categories to their associated og group (forum), if any.
+*/
+
+function sigmah_contact_form_process_function(&$form, &$form_state) 
+{
+	$options = array("is_attributes_child" => "1", 
+					 "attributes" => array(array("name" => "readonly", "value" => "readonly")));
+
+	// Make this fields readonly for logged in users.
+	form_recursive_attr_set($form['name'], $options);
+	form_recursive_attr_set($form['mail'], $options);
+
+	return $form;
+}
+
+/**
+ * Contact form submit handler. Node/user creation is done here.
+*/
+function sigmah_contact_contact_submit_handler(&$form, &$form_state){
+
+  $values = $form_state['values'];
+
+  if(!user_is_logged_in())
+  {
+  	if(variable_get("sigmah_contact_create_users", "1") == "1")
+	{
+	watchdog('sigmah_contact', 'Create users setting is ON: proceeding.', null, WATCHDOG_NOTICE);
+
+	$name         =  $values["name"];
+	$mail         =  $values["mail"];
+
+	// Check again, in case for some reason this has not been handled in validation.
+	$user_exists  =  sigmah_contact_user_exists($name, $mail);
+    if ($user_exists == TRUE) 
+    {
+		drupal_set_message(t("Can't create an user nor post to the forum, because the name and/or e-mail you have provided are not available for registration (already in use)."), 'error');
+		watchdog('sigmah_contact', 'Unexpected error. Already existing username or email have been provided. Aborting.', null, WATCHDOG_ALERT);
+		return FALSE;
+    }
+
+    else
+    {//proceed with user and node creation
+	  
+	  // Starting user creation
+      $pt_pass = user_password();
+      $now     = time();
+
+      $created = $now;
+      $account = user_save(NULL, 
+                          array('name'    =>  $name, 
+                                'pass'    =>  $pt_pass, 
+                                'mail'    =>  $mail, 
+                                'status'  =>  '1', //active
+                                'created' =>  $created,
+                                'access'  =>  $now));
+
+      if (!$account) {
+          drupal_set_message(t("Error creating your user account. No forum message posted."), 'error');
+          watchdog(t('Error creating user account %user_name, %user_mail. Aborting with no forum message posted.',
+        		   array("%user_name" => $name, "%user_mail" => $mail)), null, WATCHDOG_ERROR);
+          return FALSE;
+      }
+
+      $account->password = $pt_pass;
+      $op = 'register_no_approval_required';
+      $um = _user_mail_notify($op, $account);//Send the common registration email with the password.
+	  sigmah_set_result("user_account_created", array("success" => TRUE, "data" => $account));
+
+      watchdog('sigmah_contact', 'User account '.$name.' uid: '.$account->uid.' successfully created.', null, WATCHDOG_NOTICE);
+      flood_register_event("contact_form_user_create");
+  	 }
+  	 }/* /sigmah_contact_create_users */
+  	 else{
+  	    watchdog(t('Skipping user creation as per relative setting.'), null, WATCHDOG_NOTICE);
+  	 	sigmah_set_result("user_account_created", array("success" => false, "error" => "create_user_disabled"));
+  	 }
+  }/* /!user_is_logged_in */
+  else
+  {// logged in user using the contact form
+     global $user; 
+     $account = $user;
+     watchdog('sigmah_contact', 'Contact form submission by logged in user detected.', null, WATCHDOG_NOTICE);
+  }
+
+  if(empty($values["cid"])){
+  		drupal_set_message(t("Can't proceed: unexpected category error."), 'error');
+  		watchdog('sigmah_contact', 'Unexpected category error.', null, WATCHDOG_ERROR);
+		return FALSE;
+  }
+  $category_id_form = $values["cid"];
+
+  if(variable_get("sigmah_contact_create_posts", "0") == "1")
+  {
+  //either the user had to be logged in or we have just created his account to continue.
+  if($account->uid)
+  {//ok: user available
+  watchdog('sigmah_contact', 'Create posts setting is ON: proceeding...', null, WATCHDOG_NOTICE);
+
+  // check if forum_posting_disabled is ON for this cid_og
+
+    if(cid_og_can_post_to(array("cid" => $values["cid"]))) {
+      
+	  //can post -proceed
+      
+	  $group = cid_og_load_group_by_contact_cid($category_id_form);
+	  $og_nid_db = $group["nid"];
+
+	  $node = new stdClass();
+	  $node->type    = "forum";
+	  node_object_prepare($node);
+
+	  $node->name    = $values["subject"];
+	  $node->title   = $node->name;
+	  $node->body    = $values["message"];
+
+	  $node->created = time();
+	  $node->changed = $node->created;
+	  $node->status  = 1;
+	  $node->promote = 0;
+	  $node->sticky  = 0;
+	  $node->format  = 1;
+	  $node->uid     = $account->uid;
+
+	  if(!empty($og_nid_db) /*&& $category_id_form != "-1"/*"not sure"*/)
+	  {
+	  		$node->og_groups = array($og_nid_db);
+	  }
+
+	  // Hook
+	  drupal_alter('sigmah_contact_before_save_node', $node);
+
+	  if ($node = node_submit($node)) 
+	  {
+	    node_save($node);
+
+	    $node_save_success = !empty($node->nid);
+	    if($node_save_success)
+	    {	
+		    // uid workaround to avoid patching node.module
+			$nodeload = node_load($node->nid);
+			$nodeload->uid = $account->uid;
+			node_save($nodeload);
+			$node_savefix_success = !empty($nodeload->nid);
+		    // /end
+
+			// Hook
+		    drupal_alter('sigmah_contact_after_save_node', $nodeload);
+
+			if(!$node_savefix_success){ 
+				node_delete($node->nid);
+				watchdog('sigmah_contact', 'Forum post savefix failed: #FNS0', null, WATCHDOG_ERROR);
+			    sigmah_set_result("forum_post_inserted", array("success" => false, "error" => "unexpected_error"));
+			}
+
+		    else
+		    {//node savefixed OK
+	    	$message_link = sigmah_contact_template_hlink_from_nid($node->nid, "message", array("target" => "_blank"));
+		    sigmah_set_result("forum_post_inserted", array("success" => true, "data" => $nodeload));
+
+		  	if(/*$category_id_form == "-1"*/empty($og_nid_db))//cid with no associated og forum
+		  	{
+		  	    watchdog('sigmah_contact', t('Forum ').$message_link.t(' nid: !nid successfully created and not assigned to any forum.',
+					array("!nid" => $nodeload->nid)), null, WATCHDOG_NOTICE);
+		    }
+		  	else
+		  	{	
+				$forum_link   = sigmah_contact_template_hlink_from_nid($og_nid_db, "forum", array("target" => "_blank"));
+
+				watchdog('sigmah_contact', 
+					t('Forum ').$message_link.t(' nid: !nid successfully created and assigned to ').$forum_link.t(' id: %forum_id and uid: %uid.',array("!nid" => $nodeload->nid, "%forum_id" => $og_nid_db, "%uid" => $nodeload->uid)), null, WATCHDOG_NOTICE);
+		    }
+		    }
+		    
+		}/* /node_save_success*/
+	    else
+	    {//node_save_error
+	        watchdog('sigmah_contact', 'Message not posted to the forum: #FNS2', null, WATCHDOG_ERROR);
+	        sigmah_set_result("forum_post_inserted", array("success" => false, "error" => "#FNS2"));
+	  	}
+	  }
+	  else 
+	  {//node_submit failed
+	        watchdog('sigmah_contact', 'Message not posted to the forum: #FNS1', null, WATCHDOG_ERROR);
+	        sigmah_set_result("forum_post_inserted", array("success" => false, "error" => "#FNS1"));
+	  }
+
+	}/* /cid_og_can_post_to*/
+
+	else
+	{//posting to this cid_og is disabled
+		watchdog('sigmah_contact', t("Create posts setting is ON but posting to cid %cid is disabled."), array("%cid" => $category_id_form), WATCHDOG_NOTICE);
+		sigmah_set_result("forum_post_inserted", array("success" => false, "error" => "create_post_specific_forum_disabled"));
+	}
+
+	}/* /account_uid check */
+	else
+	{//no logged in or newly created user to assign post to
+		$error_text = t("Create posts setting is ON but no logged in user or created user to assign post to. Won't create the forum post.");
+		if(!user_is_logged_in() && variable_get("sigmah_contact_create_users") != "1")
+			$error_text = t(" Warning: no logged in user and create users setting is OFF: can't create an user to assign the forum post to.");
+		watchdog('sigmah_contact', $error_text, null, WATCHDOG_NOTICE);
+		sigmah_set_result("forum_post_inserted", array("success" => false, "error" => "no_user_to_assign_to"));
+		}
+	}/* /sigmah_contact_create_posts*/
+	else
+	{//sigmah_contact_create_posts setting is disabled
+		watchdog('sigmah_contact', t("Create posts setting is OFF: won't post. "), null, WATCHDOG_NOTICE);
+		sigmah_set_result("forum_post_inserted", array("success" => false, "error" => "create_post_disabled"));
+	}
+
+	$contact = contact_load($category_id_form);
+
+	if(!empty($contact))
+	{
+		$recipient_str = " ".t("us");
+		if(variable_get("sigmah_contact_show_category_email_to_users", 0) == "1")
+		{
+			$recipient_str = t(" us at: ").$contact['recipients'];
+		}
+		if(empty($message_link)) $message_link = "message";//forum posting failed...
+		sigmah_set_result("email_recipients", array("success" => true, "data" => $contact['recipients']));
+	
+		if($form_state['values']['copy'] && user_is_logged_in())://copy is sent to logged in users
+			sigmah_set_result("email_sent_copy_to_user", array("success" => true));
+			
+		endif;
+	}
+  
+    // All done: redirect to index or landing page.
+    sigmah_redirect_contact_form($form, $form_state);
+}
+
+function sigmah_redirect_contact_form(&$form, &$form_state) { 
+
+    //unset($_REQUEST['destination']);
+    unset($form['#redirect']); 
+    if(variable_get("sigmah_contact_skip_submission_landing_page", 0) == "0"){//Redirect to the .tpl landing page
+	    sigmah_set_result("submission_success", "1");
+	    $form_state['redirect'] = array("contact-submitted");
+	}
+    else { //Redirect to index
+    	sigmah_clear_result();
+    	$form_state['redirect'] = array("");
+    }
+}
+
+/**
+ * Prepare values for the page-contact-submitted .tpl file.
+ */
+
+function sigmah_clear_result() { 
+	unset($_SESSION['sigmah_contact_result']);
+}
+
+function sigmah_set_result($what, $arresult) { 
+if ($what) {
+	if (!isset($_SESSION['sigmah_contact_result'])) {
+      $_SESSION['sigmah_contact_result'] = array();
+    }
+
+	$_SESSION['sigmah_contact_result'][$what] = $arresult;
+  }
+  return isset($_SESSION['sigmah_contact_result']) ? $_SESSION['sigmah_contact_result'] : NULL;
+}
+
+/**
+ * Implementation of hook_theme()
+ */
+
+function sigmah_contact_theme() {
+  return array(
+    'contact_submitted' => array(/*page_*/
+      'arguments' => array('options' => NULL),
+      'template'  => 'page-contact-submitted'
+    )
+  );
+}
+
+/**
+ * Write the settings form values to DB.
+*/
+
+function sigmah_contact_settings_form_submit($form, &$form_state) {
+
+	$r = db_query("TRUNCATE TABLE {contact_cid_og}");
+
+	foreach($form_state["values"]["cid_og"] as $cid => $ar_values)
+	{
+		if(empty($cid) || empty($ar_values)) continue;
+		$dbq = " INSERT INTO {contact_cid_og} (cid, nid, enabled, forum_posting_disabled, managed) VALUES ('%d', '%d', '%d', '%d', '%d')";
+		$r = db_query($dbq, $cid, $ar_values["nid"], $ar_values["enabled"], $ar_values["forum_posting_disabled"], $ar_values["managed"]);
+		if(empty($r)) drupal_set_message("Fatal error: query failed.");
+	}
+}
+
+/**
+ * Additional validation for the settings form.
+*/
+
+function sigmah_contact_settings_form_validate($form, &$form_state) {
+	//all contact form categories can't be disabled
+	$one_category_set = false;
+
+	foreach($form_state["values"]["cid_og"] as $cid => $ar_values)
+	if($ar_values["enabled"] == "1" && $ar_values["managed"] == "1"){
+	$one_category_set = true; break;
+	}
+	if($one_category_set === FALSE && $form['sigmah_contact_consider_unmanaged_categories_disabled']['#value'] != "0")
+	form_set_error('sigmah_contact', t("Please disable the 'A category must be managed and enabled to...' option or at least set one category as managed and 'Show this option on the contact form'."));
+}
+
+/**
+ * Validation helpers.
+*/
+
+function element_validate_number($element, &$form_state) {
+  $value = $element['#value'];
+  if ($value != '' && !is_numeric($value)) {
+    form_error($element, t('%name must be a number.', array('%name' => $element['#title'])));
+  }
+}
+
+function element_validate_registration_user_mail($element, &$form_state) {
+
+  if(user_is_logged_in()) return TRUE;
+
+  if(sigmah_contact_user_exists($form_state["values"]["name"], $form_state["values"]["mail"]) === TRUE) {
+  	 $error_str = t("Please insert a name and/or e-mail that are not in use by other users to continue.");
+   	 form_set_error("mail", $error_str);	 	 
+   	 form_set_error("name", $error_str);	    	 
+  }
+
+  // Remove duplicate messages (workaround to have 2 fields highlighted and one error message).
+  if (isset($_SESSION['messages']['error'])) {
+  	  $_SESSION['messages']['error'] = array_unique($_SESSION['messages']['error']);
+  }
+}
+
+/**
+ * Build the admin settings form.
+*/
+
+function sigmah_contact_settings_form($form_state) {
+	$form = array();
+
+	// Settings form css and js
+	drupal_add_css(drupal_get_path('module', 'sigmah_contact') . '/includes/sigmah_contact_admin.css');
+	drupal_add_js(drupal_get_path('module', 'sigmah_contact') . '/includes/sigmah_contact_admin.js');
+
+	$form['form_settings'] = array (
+		'#type' => 'fieldset',
+		'#title' => t('Settings related to the contact form and its submission')
+		);
+
+	$form['form_settings']['sigmah_contact_skip_submission_landing_page'] = array(
+	 '#type'  => 'checkbox',
+	 '#title'  => t('Redirect directly to index after a successfull submission.'),
+	 '#default_value' => variable_get('sigmah_contact_skip_submission_landing_page', '0'),
+	 '#description' => t("If this option is disabled the user will be redirected to a custom landing page."),
+	 '#required' => TRUE,
+	 '#weight'  => 2,
+	 '#attributes' => array('onclick' => 'handle_connected(this, "sigmah_contact_show_category_email_to_users", true); handle_connected(this,"sigmah_contact_form_submit_redirect_ms", true); ')
+	);
+
+	$form['form_settings']['sigmah_contact_show_category_email_to_users'] = array(
+	 '#type'  => 'checkbox',
+	 '#title'  => t('Show the category destination email to users after a successfull submit'),
+	 '#default_value' => variable_get('sigmah_contact_show_category_email_to_users', 0),
+	 '#description' => t("i.e 'feedbacks@sigmah.org'"),
+	 '#required' => TRUE,
+	 '#weight'  => 5
+	);
+
+	$form['form_settings']['sigmah_contact_link_category_ogforum'] = array(
+	 '#type'  => 'checkbox',
+	 '#title'  => t('Link each category to the corresponding (og group) forum.'),
+	 '#default_value' => variable_get('sigmah_contact_link_category_ogforum', 1),
+	 '#description' => t("Link the contact form selectable checkbox categories to the corresponding (og group) forum, if any (just managed)."),
+	 '#required' => TRUE,
+	 '#weight'  => 6
+	);
+
+	$form['form_settings']['sigmah_contact_form_submit_redirect_ms'] = array(
+	 '#type'  => 'textfield',
+	 '#title'  => t('Form submit redirect timer'),
+	 '#default_value' => variable_get('sigmah_contact_form_submit_redirect_ms', '5000'),
+	 '#description' => t("How many ms should the contact form close/redirect after a successfull submit."),
+	 '#required' => TRUE,
+	 '#weight'  => 4,
+	 '#element_validate' => array('element_validate_number')
+	);
+
+	// Conditionals
+	if($form['form_settings']['sigmah_contact_skip_submission_landing_page']['#default_value'] == "1") {
+		$form['form_settings']['sigmah_contact_form_submit_redirect_ms']['#attributes'] = array('class' => 'setting-not-active');
+		$form['form_settings']['sigmah_contact_show_category_email_to_users']['#attributes'] = array('class' => 'setting-not-active');
+	}
+
+	$form['form_settings']['sigmah_contact_form_id'] = array(
+	 '#type'  => 'textfield',
+	 '#title'  => t('The id of the site contact form'),
+	 '#default_value' => variable_get('sigmah_contact_form_id', 'contact_mail_page'),
+	 '#description' => t("Used by this module to identify the form to alter."),
+	 '#required' => TRUE,
+	 '#weight'  => 0
+	);
+
+	$form['sigmah_contact_consider_unmanaged_categories_disabled'] = array(
+	 '#type'  => 'checkbox',
+	 '#title'  => t('A category must be managed and enabled to show up on the contact form.'),
+	 '#default_value' => variable_get('sigmah_contact_consider_unmanaged_categories_disabled', '0'),
+	 '#description' => t("If this is checked this module will hide contact form categories until they are managed and enabled below."),
+	 '#required' => TRUE,
+	 "#weight" => 0
+	);
+
+	$form['sigmah_contact_devel_mode_on'] = array(
+	 '#type'  => 'checkbox',
+	 '#title'  => (variable_get('sigmah_contact_devel_mode_on', 0) == "0") ? t('Developer mode (OFF).') : t('Developer mode (ON).'),
+	 '#default_value' => variable_get('sigmah_contact_devel_mode_on', 0),
+	 '#description' => t(""),
+	 '#required' => TRUE,
+	 '#weight'  => 0
+	);	
+
+	$form['sigmah_contact_create_posts'] = array(
+	 '#type'  => 'checkbox',
+	 '#title'  => t('Create posts.'),
+	 '#default_value' => variable_get('sigmah_contact_create_posts', 1),
+	 '#description' => t("This module will attempt to create forum posts for both registered and new contact-form registered users."),
+	 '#required' => TRUE,
+	 '#weight'  => 0
+	);
+
+	$form['sigmah_contact_create_users'] = array(
+	 '#type'  => 'checkbox',
+	 '#title'  => t('Create users.'),
+	 '#default_value' => variable_get('sigmah_contact_create_users', 1),
+	 '#description' => t("This module will attempt to create site_name accounts when unregistered users submit a message.", array("site_name" => variable_get('site_name', t('this site')))),
+	 '#required' => TRUE,
+	 '#weight'  => 0
+	);
+
+	$form['flood'] = array (
+		'#type' => 'fieldset',
+		'#title' => t('Flood control support')
+	);
+
+	$form['flood']['sigmah_contact_create_users_flood_protect_hour_threshold'] = array(
+	 '#type'  => 'textfield',
+	 '#title'  => t('Hourly user creation threshold'),
+	 '#default_value' => variable_get('sigmah_contact_create_users_flood_protect_hour_threshold', '2'),
+	 '#description' => t("Prevent contact form user creation flooding. This setting might be useful when the contact submission threshold is higher."),
+	 '#required' => TRUE,
+	 '#weight'  => 1,
+	 '#element_validate' => array('element_validate_number')
+	);
+
+	$form['flood']['sigmah_contact_create_users_flood_protect'] = array(
+	 '#type'  => 'checkbox',
+	 '#title'  => t('Enable flood protection for contact form user creation.'),
+	 '#default_value' => variable_get('sigmah_contact_create_users_flood_protect', '1'),
+	 '#description' => t(""),
+	 '#required' => TRUE,
+	 '#weight'  => 2,
+	 '#attributes' => array('onclick' => 'handle_connected(this, "sigmah_contact_create_users_flood_protect_hour_threshold", false);')
+	);
+
+	// Conditionals
+	if($form['flood']['sigmah_contact_create_users_flood_protect']['#default_value'] == "0") {
+		$form['flood']['sigmah_contact_create_users_flood_protect_hour_threshold']['#attributes'] = array('class' => 'setting-not-active');
+	}
+
+	$form["flood"]['contact_hourly_threshold'] = array(
+	 '#type'  => 'textfield',
+	 '#title'  => t("Drupal Hourly contact submission threshold"),
+	 '#default_value' => variable_get('contact_hourly_threshold', 3),
+	 '#description' => t(''),
+	 '#required' => FALSE,
+	 '#weight'  => 0,
+	 '#element_validate' => array('element_validate_number')
+	);
+
+	$r_cid_og = cid_og_load();
+
+	$items = array();
+	$nids  = array();
+
+	while ($r = db_fetch_array($r_cid_og)) {
+	        array_push($items, $r);	
+	        
+	        if(function_exists("views_trim_text"))
+	        	  $trimmed_desc = views_trim_text(array("max_length"=>'60', 'ellipsis'=>'1'), $r["og_description"]);
+	        else  $trimmed_desc = truncate_utf8($r["og_description"], '60', true, true);
+	        $nids[$r["nid"]] = $trimmed_desc;
+	}
+
+	$nids["-1"] = "--Do not link to any (og group) forum";
+
+	$form['cid_og'] = array (
+		'#type' => 'fieldset',
+		'#title' => t('Posting & Visibility: associate contact form categories with og groups (forums)'),
+		'#weight' => '0'
+		);
+
+	$form["cid_og"]["#tree"] = TRUE;
+
+
+	$contact_categories 		  = cid_og_load_cids();
+	$unmanaged_contact_categories = cid_og_loadfilter_cids(array("filter_unmanaged" => "1"));
+	
+	foreach($contact_categories as $item)
+	{	
+		$form["cid_og"][$item["cid"]]["#tree"] = TRUE;
+
+		$item["enabled"] ? $nid_title = 'Contact form category: '.$item['category']
+						 : $nid_title = 'Contact form category: '.$item['category']. t(" (Hidden)");
+
+		if(in_array($item["cid"], $unmanaged_contact_categories)) $nid_title = 'Contact form category: '.$item['category']. t(" (Unmanaged)");
+
+		if(!empty($item["nid"])) $default_value = $item["nid"]; else $default_value = "-1";
+
+		$form['cid_og'][$item["cid"]]["nid"] = array(
+		'#type'=>'select',
+		'#title' => $nid_title,
+		'#required' => TRUE, 
+		'#options' => $nids,
+		'#multiple' => false,
+		'#default_value' => $default_value,
+		'#attributes' => array('data-cid' => $item["cid"])
+		);
+		$form['cid_og'][$item["cid"]]["nid"]["#attributes"]["readonly"] = "readonly";
+
+		$form['cid_og'][$item["cid"]]["managed"] = array(
+		'#type'=>'checkbox',
+		'#title' => 'Check to manage this category.',
+		'#required' => TRUE, 
+		'#default_value' => $item["managed"],
+		'#attributes' => array('onclick' => 'checkbox_category_managed_clicked(this);', 'data-cid' => $item["cid"])
+		);
+
+		$form['cid_og'][$item["cid"]]["enabled"] = array(
+		'#type'=>'checkbox',
+		'#title' => 'Show this option on the contact form.',
+		'#required' => TRUE, 
+		'#default_value' => $item["enabled"],
+		'#attributes' => array('data-cid' => $item["cid"])
+		);
+
+		$form['cid_og'][$item["cid"]]["forum_posting_disabled"] = array(
+		'#type'=>'checkbox',
+		'#title' => 'Disable posting to this (og group) forum using the contact form.',
+		'#required' => TRUE, 
+		'#default_value' => $item["forum_posting_disabled"],
+		'#checked' => !$item["enabled"],
+		'#attributes' => array('data-cid' => $item["cid"])
+		);
+
+		if($item["managed"] != "1"):
+			  $form['cid_og'][$item["cid"]]["enabled"]['#attributes']['class'] = 'setting-not-active';
+			  $form['cid_og'][$item["cid"]]["forum_posting_disabled"]['#attributes']['class'] = 'setting-not-active';
+			  $form['cid_og'][$item["cid"]]["nid"]['#attributes']['class'] = 'setting-not-active';
+		endif;
+
+		(!empty($item["recipients"])) ? $cid_recipients = t("Recipients: %recipients", array("%recipients" => $item["recipients"]))
+									 : $cid_recipients = t("No recipients");
+		$form['cid_og'][$item["cid"]]["label_recipients"] = array(
+		'#type'=>'markup',
+		'#value' => $cid_recipients,
+		'#suffix' => "  ".l(t("Edit"), "admin/build/contact/edit/".$item["cid"])
+		);
+	}
+
+	if($form['#submit'] != null) array_pop($form['#submit']);
+	$form['#submit'][] = 'sigmah_contact_settings_form_submit';
+
+	return system_settings_form($form);
+}
+
+/**
+ * Register the menu item and the contact-submitted landing page
+*/
+
+function sigmah_contact_menu() {
+
+   $items['admin/settings/sigmah_contact'] = array(
+	 'title'  => t('Sigmah contact settings'),
+	 'description' => t('Configure the Sigmah contact form module settings'),
+	 'page callback'  => 'drupal_get_form',
+	 'page arguments'  => array('sigmah_contact_settings_form'),
+	 'access callback'  => 'user_access',
+	 'access arguments' => array('administer sigmah_contact'),
+	 'type' => MENU_NORMAL_ITEM
+	  );
+
+  if(variable_get("sigmah_contact_devel_mode_on", '0') == '1'):
+
+  $items['admin/settings/sigmah_contact/reset_flood_entries'] = array(
+	  'title' => 'Reset Current User Flood Entries',
+	  'description' => t('Perform flood entries reset'),
+	  'page callback' => 'drupal_get_form',
+	  'page arguments' => array('sigmah_contact_devel_reset_flood_entries'),
+	  'access arguments' => array('administer sigmah_contact'),
+	  'type' => MENU_CALLBACK
+  );
+
+   $items['admin/settings/sigmah_contact/full_reset'] = array(
+	  'title' => 'Reset this module Settings',
+	  'description' => t('Perform settings reset'),
+	  'page callback' => 'drupal_get_form',
+	  'page arguments' => array('sigmah_contact_form_full_reset'),
+	  'access arguments' => array('administer sigmah_contact'),
+	  'type' => MENU_CALLBACK
+  );
+
+  endif;
+
+  $items['contact-submitted'] = array(
+      'title' => t('Contact Request Submitted'),
+	  'access callback' => TRUE,
+	  'access arguments' => TRUE,
+	  'template' => 'page-contact-submitted',
+	  'type' => MENU_CALLBACK
+  );
+
+  return $items;
+}
+
+
+/**
+ * Debugging function.
+*/
+
+function sigmah_contact_devel_reset_flood_entries() {
+ 	global $user;
+ 	if(empty($user->hostname)) { 
+ 		drupal_set_message(t("Flood reset operation failed (your hostname is empty)."));	
+ 	}
+ 	else { 
+ 		$qr = db_query("DELETE from {flood} WHERE hostname='%s'", $user->hostname);
+ 		$option = array("!deleted_entries" => db_affected_rows(), "!hostname" => $user->hostname);
+ 		drupal_set_message(t("Flood reset operation executed for hostname: '!hostname'. Deleted: !deleted_entries entries.", $option));
+ 		watchdog('sigmah_contact', t("Flood reset operation executed for current user."), null, WATCHDOG_NOTICE);
+ 	}
+
+	drupal_goto("admin/settings/sigmah_contact");
+}
+
+/**
+ * Full settings and DB rows reset.
+*/
+function sigmah_contact_form_full_reset() {
+	
+	sigmah_contact_reset_all();
+	drupal_set_message(t("This module settings and DB data have been reset."));
+	drupal_goto("admin/settings/sigmah_contact");
+}
+
+/**
+ * Implementation of hook_perm
+*/
+function sigmah_contact_perm(){
+	return array('administer sigmah_contact');
+}
+
+/**
+ * Add the module CSS and JS files to the submission landing page.
+*/
+
+function sigmah_contact_preprocess_page(&$vars)
+{
+	if($vars['template_files'][0] == 'page-contact-submitted')
+	{
+		drupal_add_css(drupal_get_path('module', 'sigmah_contact') .'/includes/sigmah_contact.css');
+		sigmah_transfer_settings_js();
+		drupal_add_js(drupal_get_path('module', 'sigmah_contact').'/includes/sigmah_contact.js');
+	}
+}
+
+/**
+ * Implementation of theme_registry_alter.
+*/
+
+function sigmah_contact_theme_registry_alter(&$theme_registry) {
+  $theme_hook = 'page'; // my hook name
+  // Get the path to this module
+  $modulepath = drupal_get_path('module', 'sigmah_contact');
+  // Add the module path on top in the array of paths
+  array_unshift($theme_registry[$theme_hook]['theme paths'], $modulepath);
+}
+
+/**
+ * Implementation of hook_help.
+*/
+
+function sigmah_contact_help($section) {
+  switch ($section) {
+  case 'admin/settings/sigmah_contact':
+      $s = l(t("Configure"), "admin/build/contact")." ".t("the contact form")." and ".l(t("add categories"), "admin/build/contact/add")." ".t("to it.");
+
+      if(variable_get('sigmah_contact_devel_mode_on', 0) == "1"):
+      $s .= "<br>".l(t("Completely reset"), "admin/settings/sigmah_contact/full_reset")." ".t("this module settings and data.")."<br>".l(t("Reset"), "admin/settings/sigmah_contact/reset_flood_entries")." ".t("your flood entries.");
+  	  endif;
+  	  return $s;
+    case 'admin/build/contact':
+ 	  if(variable_get('sigmah_contact_consider_unmanaged_categories_disabled', '0') == '1')
+ 	  		$ret = t("The contact form categories are currently managed by sigmah_contact.")."<br>";
+      $ret .= l(t("Click here"), "admin/settings/sigmah_contact")." ".t("to configure the sigmah_contact module.");
+      return $ret;
+  }
+}
+?>

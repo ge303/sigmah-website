@@ -1,0 +1,16 @@
+@charset "UTF-8";
+/**
+* sigmah_contact_admin.css
+* Module settings form CSS.
+*/
+
+.setting-not-active
+{
+  	text-decoration: line-through;
+  	opacity: 0.3;
+}
+
+input#edit-reset
+{/*use the full reset developer mode function*/
+  	display: none;
+}

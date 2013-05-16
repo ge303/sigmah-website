@@ -11,7 +11,10 @@
     <!-- Background Discussion for adding this script present at :
     http://www.sigmah.org/issues/view.php?id=303 -->
     $(document).ready(function(){
-      $("#edit-message").val(parent.jQuery("#formulaire_send_textarea").val());
+        if(parent.jQuery.fancybox !== undefined) {//fancybox code
+           $("#edit-message").val(parent.jQuery("#formulaire_send_textarea").val());
+           $("#stepPop").removeClass("hidden");
+        }
     });
     </script>
   </head>
@@ -22,7 +25,7 @@
     </div>
 	<?php print $messages; ?>
     <div class="contentPop"> 
-    	<h4><span><?php echo t('Step').' 2/2 '; ?></span><?php echo t('questions, comments ?'); ?></h4>
+    	<h4><span id="stepPop" class="hidden"><?php echo t('Step').' 2/2 '; ?></span><?php echo t('questions, comments ?'); ?></h4>
     <?php print $content; ?>
 	</div>
 </body>

@@ -27,6 +27,7 @@ function sigmah_form_alter(&$form, &$form_state, $form_id){
 	}elseif ($form_id == 'user_confirm_delete') {
 		unset($form['user_delete_action']['#options']['user_delete_delete']);   
 	}elseif($form_id == 'contact_mail_page') {
+		if(module_exists("sigmah_contact") === FALSE) {
 		$form['#redirect'] = FALSE;
 		$form['subject']['#weight'] = 1;
 		$form['message']['#weight'] = 2;
@@ -49,14 +50,13 @@ function sigmah_form_alter(&$form, &$form_state, $form_id){
 		unset($form['cid']['#title']);
 		$form['cid']['#prefix'] = '<h6>'.t('In order to deal with your request more effectively').'</h6><p>'.t('You can specify which forum you would like your posting to appear in (Don\'t worry, a moderator will put your posting in an appropriate forum if you are not sure)').' : '.'</p>';
 		$form['cid']['#weight'] = 7;
+		}
 		$form['submit']['#weight'] = 8;
 		$form['submit']['#prefix'] = '<hr />';
 		$form['submit']['#theme']= 'sigmah_contact_submit';	
 		$form['#submit']['#ahah']=array(
 		  'method' => 'close_window',
-		);
-		
-		//$form['#submit'][] = 'sigmah_contact_submit_handler';		
+		);	
   }
 }
 

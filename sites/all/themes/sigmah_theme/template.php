@@ -30,7 +30,8 @@ function sigmah_theme_preprocess_page(&$vars, $hook) {
   }
   //drupal_add_js(drupal_get_path('theme', 'sigmah_theme') . '/js/jqModal.js','theme');
   if(!empty($vars['template_files'])){
-	if($vars['template_files'][0] == 'page-contact'){
+	if($vars['template_files'][0] == 'page-contact' 
+    || $vars['template_files'][0] == 'page-contact-submitted' ){
 		drupal_add_css(drupal_get_path('theme', 'sigmah_theme') .'/new_css/pop.css');
 	}
   }
